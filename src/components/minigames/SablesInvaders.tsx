@@ -13,41 +13,67 @@ type Enemy = {
   x: number;
   y: number;
   destroyed: boolean;
+  isBoss?: boolean;
 };
 
 type Bullet = {
   id: number;
   x: number;
   y: number;
+  fromEnemy?: boolean;
 };
 
 export function SablesInvaders({ onClueCollected, onComplete }: Props) {
   const [playerX, setPlayerX] = useState(50);
+  const [playerLives, setPlayerLives] = useState(3);
   const [enemies, setEnemies] = useState<Enemy[]>([]);
   const [bullets, setBullets] = useState<Bullet[]>([]);
   const [score, setScore] = useState(0);
   const [gameStarted, setGameStarted] = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [explosions, setExplosions] = useState<{ x: number; y: number; id: number }[]>([]);
   const bulletIdRef = useRef(0);
+  const enemyMoveDirection = useRef(1);
   const gameAreaRef = useRef<HTMLDivElement>(null);
-  const enemyMoveDirection = useRef(1); // 1 = right, -1 = left
+  const [wave, setWave] = useState(1);
 
-  useEffect(() => {
-    if (!gameStarted) return;
-
-    // Initialize enemies - more enemies and different formation
+  // Inicializa enemigos y oleadas
+  const initEnemies = (waveNumber: number) => {
     const initialEnemies: Enemy[] = [];
-    for (let i = 0; i < 24; i++) { // Increased from 15 to 24
+    const baseCount = 4 + waveNumber; // Cada wave aumenta enemigos
+    const rows = Math.min(4, baseCount);
+    const cols = Math.min(6, baseCount + 2);
+
+    for (let i = 0; i < rows * cols; i++) {
       initialEnemies.push({
         id: i,
-        x: (i % 6) * 14 + 15, // 6 columns instead of 5
-        y: Math.floor(i / 6) * 12 + 8, // 4 rows
-        destroyed: false
+        x: (i % cols) * 14 + 10,
+        y: Math.floor(i / cols) * 12 + 8,
+        destroyed: false,
       });
     }
+
+    // Boss en la última oleada
+    if (waveNumber === 5) {
+      initialEnemies.push({
+        id: 999,
+        x: 50,
+        y: 5,
+        destroyed: false,
+        isBoss: true,
+      });
+    }
+
     setEnemies(initialEnemies);
+  };
+
+  useEffect(() => {
+    if (gameStarted) {
+      initEnemies(1);
+    }
   }, [gameStarted]);
 
+  // Controles del jugador
   useEffect(() => {
     if (!gameStarted || showResult) return;
 
@@ -58,45 +84,48 @@ export function SablesInvaders({ onClueCollected, onComplete }: Props) {
         setPlayerX(prev => Math.min(95, prev + 5));
       } else if (e.key === ' ') {
         e.preventDefault();
-        shoot();
+        shoot(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [gameStarted, showResult, playerX]); // Added playerX to dependencies
+  }, [gameStarted, showResult, playerX]);
 
+  // Movimiento de enemigos y disparos enemigos
   useEffect(() => {
     if (!gameStarted || showResult) return;
 
     const interval = setInterval(() => {
-      setBullets(prev => {
-        return prev
-          .map(bullet => ({ ...bullet, y: bullet.y - 3 }))
-          .filter(bullet => bullet.y > 0);
-      });
+      setBullets(prev =>
+        prev
+          .map(b => ({ ...b, y: b.fromEnemy ? b.y + (b.fromEnemy ? 2 : 3) : b.y - 3 }))
+          .filter(b => b.y > 0 && b.y < 100)
+      );
 
       setEnemies(prev => {
-        const activeEnemies = prev.filter(e => !e.destroyed);
-        if (activeEnemies.length === 0) return prev;
+        const active = prev.filter(e => !e.destroyed);
+        if (active.length === 0) return prev;
 
-        // Find boundaries
-        const leftMost = Math.min(...activeEnemies.map(e => e.x));
-        const rightMost = Math.max(...activeEnemies.map(e => e.x));
+        const leftMost = Math.min(...active.map(e => e.x));
+        const rightMost = Math.max(...active.map(e => e.x));
 
-        // Change direction if hitting edges
-        let newDirection = enemyMoveDirection.current;
-        if (rightMost >= 95 && enemyMoveDirection.current > 0) {
-          newDirection = -1;
-        } else if (leftMost <= 5 && enemyMoveDirection.current < 0) {
-          newDirection = 1;
-        }
-        enemyMoveDirection.current = newDirection;
+        let newDir = enemyMoveDirection.current;
+        if (rightMost >= 95 && enemyMoveDirection.current > 0) newDir = -1;
+        if (leftMost <= 5 && enemyMoveDirection.current < 0) newDir = 1;
+        enemyMoveDirection.current = newDir;
 
-        return prev.map(enemy => ({
-          ...enemy,
-          x: enemy.destroyed ? enemy.x : enemy.x + newDirection * 0.3, // Move horizontally
-          y: enemy.destroyed ? enemy.y : enemy.y + 0.05 // Slower vertical movement
+        // Disparo enemigo aleatorio
+        active.forEach(enemy => {
+          if (Math.random() < 0.005 * (enemy.isBoss ? 3 : 1)) {
+            shoot(true, enemy.x, enemy.y);
+          }
+        });
+
+        return prev.map(e => ({
+          ...e,
+          x: e.destroyed ? e.x : e.x + newDir * 0.3,
+          y: e.destroyed ? e.y : e.y + (e.isBoss ? 0 : 0.05),
         }));
       });
     }, 50);
@@ -104,30 +133,53 @@ export function SablesInvaders({ onClueCollected, onComplete }: Props) {
     return () => clearInterval(interval);
   }, [gameStarted, showResult]);
 
+  // Detectar colisiones
   useEffect(() => {
     if (!gameStarted || showResult) return;
 
-    // Collision detection
+    // Balas del jugador vs enemigos
     bullets.forEach(bullet => {
+      if (bullet.fromEnemy) return;
       enemies.forEach(enemy => {
         if (!enemy.destroyed) {
-          const distance = Math.sqrt(
-            Math.pow(bullet.x - enemy.x, 2) + Math.pow(bullet.y - enemy.y, 2)
-          );
-          if (distance < 3) {
-            setEnemies(prev =>
-              prev.map(e => e.id === enemy.id ? { ...e, destroyed: true } : e)
-            );
+          const dist = Math.sqrt(Math.pow(bullet.x - enemy.x, 2) + Math.pow(bullet.y - enemy.y, 2));
+          if (dist < (enemy.isBoss ? 5 : 3)) {
+            setEnemies(prev => prev.map(e => e.id === enemy.id ? { ...e, destroyed: true } : e));
             setBullets(prev => prev.filter(b => b.id !== bullet.id));
             setScore(prev => prev + 1);
+            setExplosions(prev => [...prev, { x: enemy.x, y: enemy.y, id: Date.now() }]);
           }
         }
       });
     });
-  }, [bullets, enemies, gameStarted, showResult]);
 
+    // Balas enemigas vs jugador
+    bullets.forEach(bullet => {
+      if (!bullet.fromEnemy) return;
+      const dist = Math.abs(bullet.x - playerX);
+      if (bullet.y >= 80 && dist < 5) {
+        setBullets(prev => prev.filter(b => b.id !== bullet.id));
+        setPlayerLives(prev => prev - 1);
+        setExplosions(prev => [...prev, { x: playerX, y: 85, id: Date.now() }]);
+      }
+    });
+  }, [bullets, enemies, playerX]);
+
+  // Explosiones temporales
   useEffect(() => {
-    if (score >= 10 && !showResult) {
+    if (explosions.length === 0) return;
+    const timeout = setTimeout(() => {
+      setExplosions(prev => prev.slice(1));
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [explosions]);
+
+  // Cambiar oleada o terminar juego
+  useEffect(() => {
+    if (score >= wave * 10 && wave < 5) {
+      setWave(prev => prev + 1);
+      initEnemies(wave + 1);
+    } else if (score >= 50 && !showResult) {
       setShowResult(true);
       const clue: CollectedClue = {
         id: 'coordinates',
@@ -137,13 +189,19 @@ export function SablesInvaders({ onClueCollected, onComplete }: Props) {
       };
       onClueCollected(clue);
     }
-  }, [score, showResult, onClueCollected]);
+  }, [score, wave, showResult, onClueCollected]);
 
-  const shoot = () => {
+  // Muerte del jugador
+  useEffect(() => {
+    if (playerLives <= 0) setShowResult(true);
+  }, [playerLives]);
+
+  const shoot = (fromEnemy = false, x?: number, y?: number) => {
     const newBullet: Bullet = {
       id: bulletIdRef.current++,
-      x: playerX,
-      y: 85
+      x: x ?? playerX,
+      y: y ?? 85,
+      fromEnemy
     };
     setBullets(prev => [...prev, newBullet]);
   };
@@ -156,105 +214,26 @@ export function SablesInvaders({ onClueCollected, onComplete }: Props) {
     onComplete();
   };
 
-  if (!gameStarted) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 pt-24">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-slate-950/80 backdrop-blur-sm border-2 border-purple-500/50 rounded-lg p-8 max-w-2xl
-                     shadow-[0_0_30px_rgba(168,85,247,0.3)]"
-        >
-          <div className="flex items-center gap-3 mb-6 justify-center">
-            <Target className="w-8 h-8 text-purple-400" />
-            <h2 className="text-3xl text-purple-300 font-mono">SABLES INVADERS</h2>
-          </div>
-
-          <div className="text-purple-100 space-y-4 mb-6">
-            <p>Naves TIE imperiales se aproximan a la estación.</p>
-            <p className="text-purple-400">
-              OBJETIVO: Destruir 10 naves para obtener las coordenadas de acceso.
-            </p>
-            <div className="bg-purple-900/30 border border-purple-500/50 rounded p-4 mt-4">
-              <p className="text-sm">CONTROLES:</p>
-              <p className="text-sm">← → : Mover nave</p>
-              <p className="text-sm">ESPACIO : Disparar</p>
-            </div>
-          </div>
-
-          <button
-            onClick={handleStart}
-            className="w-full bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded
-                       border-2 border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.5)]
-                       transition-all font-mono"
-          >
-            INICIAR MISIÓN
-          </button>
-        </motion.div>
-      </div>
-    );
-  }
-
-  if (showResult) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 pt-24">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-slate-950/80 backdrop-blur-sm border-2 border-green-500/50 rounded-lg p-8 max-w-2xl
-                     shadow-[0_0_30px_rgba(34,197,94,0.3)] text-center"
-        >
-          <motion.div
-            animate={{ scale: [1, 1.2, 1] }}
-            transition={{ duration: 0.5 }}
-            className="text-6xl mb-4"
-          >
-            ✓
-          </motion.div>
-          <h2 className="text-3xl text-green-400 font-mono mb-4">MISIÓN COMPLETADA</h2>
-          <p className="text-green-300 mb-6">Naves TIE neutralizadas</p>
-
-          <div className="bg-purple-900/30 border-2 border-purple-400 rounded-lg p-6 mb-6">
-            <div className="text-purple-400 text-sm font-mono mb-2">COORDENADAS OBTENIDAS:</div>
-            <div className="text-3xl text-purple-200 font-mono tracking-widest">12-7-3-9</div>
-          </div>
-
-          <button
-            onClick={handleContinue}
-            className="w-full bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded
-                       border-2 border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.5)]
-                       transition-all font-mono"
-          >
-            CONTINUAR →
-          </button>
-        </motion.div>
-      </div>
-    );
-  }
+  // --- SCREENS START & RESULT OMITIDAS, las mantienes igual ---
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 pt-24">
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="w-full max-w-4xl"
-      >
-        <div className="bg-purple-900/30 border border-purple-500/50 rounded p-4 mb-4">
-          <div className="flex justify-between items-center">
-            <div className="text-purple-300 font-mono">
-              NAVES DESTRUIDAS: {score}/10
-            </div>
-            <div className="flex gap-2">
-              <Zap className="w-5 h-5 text-purple-400" />
-              <span className="text-purple-300 font-mono">ENERGÍA: 100%</span>
-            </div>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-4xl">
+        {/* HUD */}
+        <div className="bg-purple-900/30 border border-purple-500/50 rounded p-4 mb-4 flex justify-between items-center">
+          <div className="text-purple-300 font-mono">
+            NAVES DESTRUIDAS: {score}/50
+          </div>
+          <div className="flex gap-2">
+            <Zap className="w-5 h-5 text-purple-400" />
+            <span className="text-purple-300 font-mono">VIDAS: {playerLives}</span>
           </div>
         </div>
 
+        {/* GAME AREA */}
         <div
           ref={gameAreaRef}
-          className="relative w-full aspect-[4/3] bg-slate-950 border-2 border-purple-500 rounded-lg
-                     overflow-hidden shadow-[0_0_40px_rgba(168,85,247,0.4)]"
+          className="relative w-full aspect-[4/3] bg-slate-950 border-2 border-purple-500 rounded-lg overflow-hidden shadow-[0_0_40px_rgba(168,85,247,0.4)]"
           style={{
             backgroundImage: 'radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.1) 1px, transparent 1px)',
             backgroundSize: '20px 20px'
@@ -265,100 +244,64 @@ export function SablesInvaders({ onClueCollected, onComplete }: Props) {
             style={{ left: `${playerX}%` }}
             className="absolute bottom-2 -translate-x-1/2 transition-all duration-100"
           >
-            {/* X-Wing style player ship */}
             <svg width="40" height="40" viewBox="0 0 40 40" className="drop-shadow-[0_0_15px_rgba(168,85,247,0.8)]">
-              {/* Wings */}
               <path d="M20 20 L10 10 L8 12 L18 22 Z" fill="#a78bfa" />
               <path d="M20 20 L30 10 L32 12 L22 22 Z" fill="#a78bfa" />
               <path d="M20 20 L10 30 L8 28 L18 18 Z" fill="#a78bfa" />
               <path d="M20 20 L30 30 L32 28 L22 18 Z" fill="#a78bfa" />
-              
-              {/* Body */}
               <ellipse cx="20" cy="20" rx="4" ry="8" fill="#c4b5fd" />
               <rect x="18" y="12" width="4" height="16" fill="#e9d5ff" />
-              
-              {/* Cockpit */}
               <circle cx="20" cy="18" r="2" fill="#60a5fa" opacity="0.8" />
-              
-              {/* Engine glow */}
               <ellipse cx="20" cy="32" rx="3" ry="2" fill="#3b82f6" opacity="0.6" />
             </svg>
           </motion.div>
 
           {/* Bullets */}
-          {bullets.map(bullet => (
-            <div
-              key={bullet.id}
-              style={{
-                left: `${bullet.x}%`,
-                top: `${bullet.y}%`
-              }}
-              className="absolute -translate-x-1/2"
-            >
-              {/* Laser bolt */}
+          {bullets.map(b => (
+            <div key={b.id} style={{ left: `${b.x}%`, top: `${b.y}%` }} className="absolute -translate-x-1/2">
               <div className="relative">
-                <div className="w-2 h-6 bg-gradient-to-t from-purple-400 to-purple-200 rounded-full 
-                              shadow-[0_0_15px_rgba(168,85,247,1)]" />
+                <div
+                  className={`w-2 h-6 rounded-full shadow-[0_0_15px_rgba(168,85,247,1)] ${
+                    b.fromEnemy
+                      ? 'bg-red-500'
+                      : 'bg-gradient-to-t from-purple-400 to-purple-200'
+                  }`}
+                />
                 <div className="absolute inset-0 w-1 h-6 bg-white opacity-60 rounded-full mx-auto" />
               </div>
             </div>
           ))}
 
           {/* Enemies */}
-          {enemies.map(enemy => (
-            !enemy.destroyed && (
-              <motion.div
-                key={enemy.id}
-                style={{
-                  left: `${enemy.x}%`,
-                  top: `${enemy.y}%`
-                }}
-                animate={enemy.destroyed ? { scale: 0, opacity: 0 } : {}}
-                className="absolute -translate-x-1/2 -translate-y-1/2"
-              >
-                {/* TIE Fighter style enemy */}
-                <svg width="32" height="32" viewBox="0 0 32 32" className="drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]">
-                  {/* Solar panels */}
-                  <rect x="2" y="8" width="8" height="16" fill="#ef4444" opacity="0.8" />
-                  <rect x="22" y="8" width="8" height="16" fill="#ef4444" opacity="0.8" />
-                  
-                  {/* Panel details */}
-                  <line x1="2" y1="12" x2="10" y2="12" stroke="#dc2626" strokeWidth="0.5" />
-                  <line x1="2" y1="16" x2="10" y2="16" stroke="#dc2626" strokeWidth="0.5" />
-                  <line x1="2" y1="20" x2="10" y2="20" stroke="#dc2626" strokeWidth="0.5" />
-                  <line x1="22" y1="12" x2="30" y2="12" stroke="#dc2626" strokeWidth="0.5" />
-                  <line x1="22" y1="16" x2="30" y2="16" stroke="#dc2626" strokeWidth="0.5" />
-                  <line x1="22" y1="20" x2="30" y2="20" stroke="#dc2626" strokeWidth="0.5" />
-                  
-                  {/* Cockpit ball */}
-                  <circle cx="16" cy="16" r="6" fill="#7f1d1d" stroke="#ef4444" strokeWidth="1" />
-                  <circle cx="16" cy="16" r="4" fill="#991b1b" />
-                  
-                  {/* Viewport */}
-                  <circle cx="16" cy="15" r="2" fill="#fca5a5" opacity="0.6" />
-                  
-                  {/* Connectors */}
-                  <rect x="10" y="14" width="4" height="4" fill="#7f1d1d" />
-                  <rect x="18" y="14" width="4" height="4" fill="#7f1d1d" />
-                </svg>
-              </motion.div>
-            )
+          {enemies.map(enemy => !enemy.destroyed && (
+            <motion.div
+              key={enemy.id}
+              style={{ left: `${enemy.x}%`, top: `${enemy.y}%` }}
+              className="absolute -translate-x-1/2 -translate-y-1/2"
+            >
+              <svg width={enemy.isBoss ? "48" : "32"} height={enemy.isBoss ? "48" : "32"} viewBox="0 0 32 32" className="drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]">
+                <rect x="2" y="8" width="8" height="16" fill={enemy.isBoss ? "#f87171" : "#ef4444"} opacity="0.8" />
+                <rect x="22" y="8" width="8" height="16" fill={enemy.isBoss ? "#f87171" : "#ef4444"} opacity="0.8" />
+                <circle cx="16" cy="16" r={enemy.isBoss ? 6 : 4} fill="#991b1b" stroke={enemy.isBoss ? "#f87171" : "#ef4444"} strokeWidth="1" />
+                <circle cx="16" cy="16" r={enemy.isBoss ? 3 : 2} fill="#7f1d1d" />
+              </svg>
+            </motion.div>
+          ))}
+
+          {/* Explosions */}
+          {explosions.map(exp => (
+            <motion.div
+              key={exp.id}
+              style={{ left: `${exp.x}%`, top: `${exp.y}%` }}
+              className="absolute -translate-x-1/2 -translate-y-1/2"
+              animate={{ scale: [1, 1.5, 1], opacity: [1, 0.8, 0] }}
+              transition={{ duration: 0.3 }}
+            >
+              <div className="w-6 h-6 rounded-full bg-yellow-400/80 shadow-[0_0_15px_rgba(251,191,36,0.8)]" />
+            </motion.div>
           ))}
         </div>
-
-        <div className="mt-4 text-center text-purple-400 text-sm font-mono">
-          USA ← → PARA MOVER Y ESPACIO PARA DISPARAR
-        </div>
       </motion.div>
-
-      <style>{`
-        .clip-triangle {
-          clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
-        }
-        .clip-hexagon {
-          clip-path: polygon(30% 0%, 70% 0%, 100% 50%, 70% 100%, 30% 100%, 0% 50%);
-        }
-      `}</style>
     </div>
   );
 }
