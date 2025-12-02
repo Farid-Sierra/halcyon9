@@ -1,6 +1,6 @@
 import { motion } from 'motion/react';
 import { Lock, Activity, AlertTriangle, Wifi, Shield } from 'lucide-react';
-import logoImage from 'figma:asset/2b23609d30cadaa8f8a5fedc7870bac30276115f.png';
+import logoImage from "../assets/logo.png";
 
 export function IntroScreen({ onStart }: { onStart: () => void }) {
   return (

@@ -1,7 +1,9 @@
+import React from "react";
 import { useState } from 'react';
 import { motion } from 'motion/react';
 import { FileText, Search } from 'lucide-react';
 import type { CollectedClue } from '../../App';
+import { JSX } from "react/jsx-runtime";
 
 type Props = {
   onClueCollected: (clue: CollectedClue) => void;
