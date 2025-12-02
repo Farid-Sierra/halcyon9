@@ -44,15 +44,12 @@ export function SablesInvaders({ onClueCollected, onComplete }) {
   };
 
   useEffect(() => {
-    if (gameStarted) {
-      initWave(wave);
-    }
+    if (gameStarted) initWave(wave);
   }, [gameStarted, wave]);
 
   // Player movement and shooting
   useEffect(() => {
     if (!gameStarted || showResult) return;
-
     const handleKeyPress = (e) => {
       if (e.key === 'ArrowLeft') setPlayerX(prev => Math.max(5, prev - 5));
       else if (e.key === 'ArrowRight') setPlayerX(prev => Math.min(95, prev + 5));
@@ -61,49 +58,44 @@ export function SablesInvaders({ onClueCollected, onComplete }) {
         shoot();
       }
     };
-
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [gameStarted, showResult]);
 
-  // Main game loop: move enemies and bullets
+  // Main game loop
   useEffect(() => {
     if (!gameStarted || showResult) return;
 
-    const interval = setInterval(() => {
+    const loop = setInterval(() => {
       // Move player bullets
-      setBullets(prev =>
-        prev.map(b => ({ ...b, y: b.y - 3 })).filter(b => b.y > 0)
-      );
+      setBullets(prev => prev.map(b => ({ ...b, y: b.y - 3 })).filter(b => b.y > 0));
 
       // Move enemy bullets
-      setEnemyBullets(prev =>
-        prev.map(b => ({ ...b, y: b.y + 2 })).filter(b => b.y < 100)
-      );
+      setEnemyBullets(prev => prev.map(b => ({ ...b, y: b.y + 2 })).filter(b => b.y < 100));
 
       // Move enemies
       setEnemies(prev => {
-        const activeEnemies = prev.filter(e => !e.destroyed);
-        if (activeEnemies.length === 0) return prev;
+        const active = prev.filter(e => !e.destroyed);
+        if (active.length === 0) return prev;
 
-        const leftMost = Math.min(...activeEnemies.map(e => e.x));
-        const rightMost = Math.max(...activeEnemies.map(e => e.x));
-        let newDirection = enemyMoveDirection.current;
-        if (rightMost >= 95 && enemyMoveDirection.current > 0) newDirection = -1;
-        else if (leftMost <= 5 && enemyMoveDirection.current < 0) newDirection = 1;
-        enemyMoveDirection.current = newDirection;
+        const leftMost = Math.min(...active.map(e => e.x));
+        const rightMost = Math.max(...active.map(e => e.x));
+        let dir = enemyMoveDirection.current;
+        if (rightMost >= 95 && dir > 0) dir = -1;
+        else if (leftMost <= 5 && dir < 0) dir = 1;
+        enemyMoveDirection.current = dir;
 
-        return prev.map(enemy => ({
-          ...enemy,
-          x: enemy.destroyed ? enemy.x : enemy.x + newDirection * 0.3,
-          y: enemy.destroyed ? enemy.y : enemy.y + (enemy.boss ? 0.02 : 0.05),
+        return prev.map(e => ({
+          ...e,
+          x: e.destroyed ? e.x : e.x + dir * 0.3,
+          y: e.destroyed ? e.y : e.y + (e.boss ? 0 : 0.05),
         }));
       });
 
-      // Random enemy shooting
+      // Enemy shooting
       setEnemies(prev => {
         prev.forEach(enemy => {
-          if (!enemy.destroyed && Math.random() < 0.01) {
+          if (!enemy.destroyed && Math.random() < 0.02) {
             setEnemyBullets(ePrev => [
               ...ePrev,
               { id: enemyBulletIdRef.current++, x: enemy.x, y: enemy.y + 5 }
@@ -112,50 +104,51 @@ export function SablesInvaders({ onClueCollected, onComplete }) {
         });
         return prev;
       });
+
+      // Collision detection
+      // Player bullets hitting enemies
+      setEnemies(prevEnemies => {
+        let updated = [...prevEnemies];
+        bullets.forEach(bullet => {
+          updated.forEach(enemy => {
+            if (!enemy.destroyed) {
+              const distance = Math.hypot(bullet.x - enemy.x, bullet.y - enemy.y);
+              if (distance < 3) {
+                updated = updated.map(e => e.id === enemy.id ? { ...e, destroyed: true } : e);
+                setBullets(prev => prev.filter(b => b.id !== bullet.id));
+                setScore(prev => prev + (enemy.boss ? 5 : 1));
+                addExplosion(enemy.x, enemy.y);
+              }
+            }
+          });
+        });
+        return updated;
+      });
+
+      // Enemy bullets hitting player
+      setEnemyBullets(prev => {
+        let updated = [...prev];
+        updated.forEach(bullet => {
+          if (Math.abs(bullet.x - playerX) < 3 && bullet.y > 80) {
+            updated = updated.filter(b => b.id !== bullet.id);
+            setPlayerLives(prev => Math.max(0, prev - 1));
+            addExplosion(playerX, 90);
+          }
+        });
+        return updated;
+      });
+
+      // Check wave completion
+      const remaining = enemies.filter(e => !e.destroyed);
+      if (remaining.length === 0 && wave < 5) setWave(prev => prev + 1);
+      if (remaining.length === 0 && wave >= 5) completeGame();
+
+      // Check for player defeat
+      if (playerLives <= 0) setShowResult(true);
     }, 50);
 
-    return () => clearInterval(interval);
-  }, [gameStarted, showResult]);
-
-  // Collision detection
-  useEffect(() => {
-    if (!gameStarted || showResult) return;
-
-    // Player bullets hitting enemies
-    bullets.forEach(bullet => {
-      enemies.forEach(enemy => {
-        if (!enemy.destroyed) {
-          const distance = Math.hypot(bullet.x - enemy.x, bullet.y - enemy.y);
-          if (distance < 3) {
-            setEnemies(prev => prev.map(e => e.id === enemy.id ? { ...e, destroyed: true } : e));
-            setBullets(prev => prev.filter(b => b.id !== bullet.id));
-            setScore(prev => prev + (enemy.boss ? 5 : 1));
-            addExplosion(enemy.x, enemy.y);
-          }
-        }
-      });
-    });
-
-    // Enemy bullets hitting player
-    enemyBullets.forEach(bullet => {
-      if (Math.abs(bullet.x - playerX) < 3 && bullet.y > 80) {
-        setEnemyBullets(prev => prev.filter(b => b.id !== bullet.id));
-        setPlayerLives(prev => Math.max(0, prev - 1));
-        addExplosion(playerX, 90);
-      }
-    });
-
-    // Check for wave completion
-    const remaining = enemies.filter(e => !e.destroyed);
-    if (remaining.length === 0) {
-      if (wave < 5) setWave(prev => prev + 1);
-      else completeGame();
-    }
-
-    // Check for player defeat
-    if (playerLives <= 0) setShowResult(true);
-
-  }, [bullets, enemies, enemyBullets, playerX, playerLives, wave]);
+    return () => clearInterval(loop);
+  }, [gameStarted, showResult, bullets, enemies, playerX, playerLives, wave]);
 
   const addExplosion = (x, y) => {
     const id = Date.now() + Math.random();
@@ -164,17 +157,18 @@ export function SablesInvaders({ onClueCollected, onComplete }) {
   };
 
   const shoot = () => {
-    setBullets(prev => [...prev, { id: bulletIdRef.current++, x: playerX, y: 85 }]);
+    if (!gameAreaRef.current) return;
+    const gameHeight = gameAreaRef.current.clientHeight;
+    const startY = (gameHeight - 40) / gameHeight * 100;
+    setBullets(prev => [...prev, { id: bulletIdRef.current++, x: playerX, y: startY }]);
   };
 
   const handleStart = () => setGameStarted(true);
-
   const completeGame = () => {
     setShowResult(true);
     const clue = { id: 'coordinates', value: '12-7-3-9', type: 'coordinate', label: 'COORD' };
     onClueCollected(clue);
   };
-
   const handleContinue = () => onComplete();
 
   // Render
